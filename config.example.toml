@@ -207,6 +207,27 @@ openai_image_size = ""
 # Example: "cinematic photo of {term}, photorealistic, high detail"
 openai_image_prompt_template = ""
 
+# Alibaba Cloud Bailian (Model Studio) TokenPlan text-to-image material source
+# ("bailian_image"). Reuses the LLM provider's TokenPlan credentials: it reads
+# bailian_tokenplan_api_key and derives the DashScope-native host from
+# bailian_tokenplan_base_url (the ".../compatible-mode/v1" suffix is stripped),
+# then calls the synchronous multimodal-generation endpoint. Images are
+# generated on demand (one per script keyword, billed per image) and rendered
+# into short zoom-effect clips, exactly like "openai_image".
+# Model id, for example "qwen-image-2.0", "qwen-image-3.0-pro" or "wan2.7-image".
+bailian_image_model = "qwen-image-2.0"
+# Optional image size (Bailian uses "width*height"). Leave empty to pick a
+# qwen-image compatible size per video aspect (portrait 928*1664, landscape
+# 1664*928, square 1328*1328). Set a custom value for models that accept other
+# resolutions (e.g. wan2.7-image supports up to 2048*2048).
+bailian_image_size = ""
+# Optional prompt template applied to every search term. Use the "{term}"
+# placeholder to inject the keyword; leave empty to send terms as-is.
+bailian_image_prompt_template = ""
+# Optional override for the DashScope-native host. Leave empty to derive it from
+# bailian_tokenplan_base_url. Example: "https://dashscope.aliyuncs.com"
+bailian_native_base_url = ""
+
 # Optional TwelveLabs integration for semantic material ranking and video QA.
 # Install the optional dependency with: uv sync --extra twelvelabs
 # Create an API key at https://playground.twelvelabs.io/

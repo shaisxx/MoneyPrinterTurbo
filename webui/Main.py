@@ -135,7 +135,7 @@ VIDEO_SOURCE_GROUPS = {
         "wavespeed",
         "muapi",
     ),
-    "ai_image": ("openai_image",),
+    "ai_image": ("openai_image", "bailian_image"),
     "local": ("local",),
 }
 # Upload-Post 的 API Key 与发布用户分别在两个页面管理，并且发布用户名称
@@ -4073,6 +4073,49 @@ def _render_settings_dialog():
                         openai_image_prompt_template.strip(),
                     )
 
+                st.markdown(f"**{tr('Bailian Text-to-Image')}**")
+                st.caption(tr("Bailian Image Configuration Example"))
+
+                bailian_image_model = st.text_input(
+                    tr("Bailian Image Model"),
+                    value=str(config.app.get("bailian_image_model", "") or ""),
+                    placeholder="qwen-image-2.0",
+                    help=tr("Bailian Image Model Help"),
+                    key="bailian_image_model_input",
+                )
+                _set_runtime_config(
+                    "app", "bailian_image_model", bailian_image_model.strip()
+                )
+
+                with st.expander(
+                    tr("Bailian Image Advanced Settings"), expanded=False
+                ):
+                    bailian_image_size = st.text_input(
+                        tr("Bailian Image Size"),
+                        value=str(config.app.get("bailian_image_size", "") or ""),
+                        placeholder="1328*1328",
+                        help=tr("Bailian Image Size Help"),
+                        key="bailian_image_size_input",
+                    )
+                    _set_runtime_config(
+                        "app", "bailian_image_size", bailian_image_size.strip()
+                    )
+
+                    bailian_image_prompt_template = st.text_input(
+                        tr("Bailian Image Prompt Template"),
+                        value=str(
+                            config.app.get("bailian_image_prompt_template", "") or ""
+                        ),
+                        placeholder="cinematic photo of {term}, photorealistic",
+                        help=tr("Bailian Image Prompt Template Help"),
+                        key="bailian_image_prompt_template_input",
+                    )
+                    _set_runtime_config(
+                        "app",
+                        "bailian_image_prompt_template",
+                        bailian_image_prompt_template.strip(),
+                    )
+
     _save_runtime_config()
 
 
@@ -5184,6 +5227,7 @@ def _render_video_settings(panel, params):
                 "muapi": tr("MuAPI AI Video"),
                 "loomloom": tr("Shengsuan Cloud AI Video"),
                 "openai_image": tr("OpenAI Compatible Text-to-Image"),
+                "bailian_image": tr("Bailian Text-to-Image"),
                 "local": tr("Local file"),
             }
             saved_video_source_name = str(

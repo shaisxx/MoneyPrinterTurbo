@@ -1719,7 +1719,7 @@ def _render_openai_image_video(image_path: str, clip_duration: int) -> str:
         return ""
 
 
-def _download_videos_openai_image_on_demand(
+def _download_generated_images_on_demand(
     *,
     task_id: str,
     search_terms: List[str],
@@ -1727,9 +1727,15 @@ def _download_videos_openai_image_on_demand(
     audio_duration: float,
     max_clip_duration: int,
     material_directory: str,
+    generate_images_fn: Callable[..., List[MaterialInfo]],
+    provider_label: str,
 ) -> List[str]:
     """
-    按脚本片段顺序逐张生成 OpenAI 兼容文生图素材，凑够所需总时长立即停止。
+    按脚本片段顺序逐张生成文生图素材，凑够所需总时长立即停止。
+
+    ``generate_images_fn`` 与 ``provider_label`` 由具体文生图 Provider
+    （OpenAI 兼容 / 阿里云百炼）注入；按需生成、计费安全与本地渲染语义
+    在所有文生图来源之间完全共用。
 
     与 WaveSpeed 按需生成同一付费安全语义：文生图按张计费，先全量生成再
     挑选会为用不到的画面付费。每张图片生成后立即渲染成 mp4 片段并累计
@@ -1761,7 +1767,7 @@ def _download_videos_openai_image_on_demand(
 
     for search_term in search_terms:
         try:
-            items = generate_images_openai(
+            items = generate_images_fn(
                 search_term=search_term,
                 minimum_duration=max_clip_duration,
                 video_aspect=video_aspect,
@@ -1786,7 +1792,7 @@ def _download_videos_openai_image_on_demand(
                 # 素材当作失败，更不能阻断视频生成。
                 logger.warning(
                     "failed to prepare generated material source record: "
-                    f"provider=openai_image, "
+                    f"provider={provider_label}, "
                     f"error={type(source_error).__name__}, detail={source_error}"
                 )
             total_duration += min(max_clip_duration, item.duration)
@@ -1805,6 +1811,295 @@ def _download_videos_openai_image_on_demand(
     logger.success(f"generated and rendered {len(video_paths)} image materials")
     _persist_material_sources(task_id, material_sources)
     return video_paths
+
+
+def _download_videos_openai_image_on_demand(
+    *,
+    task_id: str,
+    search_terms: List[str],
+    video_aspect: VideoAspect,
+    audio_duration: float,
+    max_clip_duration: int,
+    material_directory: str,
+) -> List[str]:
+    """OpenAI 兼容文生图的按需生成入口（保持既有签名与测试兼容）。"""
+    return _download_generated_images_on_demand(
+        task_id=task_id,
+        search_terms=search_terms,
+        video_aspect=video_aspect,
+        audio_duration=audio_duration,
+        max_clip_duration=max_clip_duration,
+        material_directory=material_directory,
+        generate_images_fn=generate_images_openai,
+        provider_label="openai_image",
+    )
+
+
+def _download_videos_bailian_image_on_demand(
+    *,
+    task_id: str,
+    search_terms: List[str],
+    video_aspect: VideoAspect,
+    audio_duration: float,
+    max_clip_duration: int,
+    material_directory: str,
+) -> List[str]:
+    """阿里云百炼文生图的按需生成入口，与 openai_image 共用计费安全语义。"""
+    return _download_generated_images_on_demand(
+        task_id=task_id,
+        search_terms=search_terms,
+        video_aspect=video_aspect,
+        audio_duration=audio_duration,
+        max_clip_duration=max_clip_duration,
+        material_directory=material_directory,
+        generate_images_fn=generate_images_bailian,
+        provider_label="bailian_image",
+    )
+
+
+# 阿里云百炼 TokenPlan 文生图：与 openai_image 同属"文生图素材"来源，但走百炼
+# DashScope 原生的同步 multimodal-generation 接口（TokenPlan 网关不支持图片异步
+# 任务，实测 /images/generations 与异步 image-synthesis 均被拒绝）。成功响应返回
+# 一次性 OSS 图片直链，下载后渲染成与 local 素材同款"缓慢放大"片段，对下游剪辑
+# 流程完全透明。API Key 与 host 复用 LLM 的 bailian_tokenplan_* 配置，仅模型名、
+# 尺寸和提示词模板使用独立的 bailian_image_* 键。
+BAILIAN_IMAGE_ENDPOINT_PATH = (
+    "api/v1/services/aigc/multimodal-generation/generation"
+)
+BAILIAN_IMAGE_DEFAULT_MODEL = "qwen-image-2.0"
+BAILIAN_NATIVE_HOST_FALLBACK = "https://token-plan.cn-beijing.maas.aliyuncs.com"
+# qwen-image 系列按画幅推荐的合法尺寸（宽*高）；bailian_image_size 可显式覆盖。
+BAILIAN_IMAGE_DEFAULT_SIZES = {
+    VideoAspect.portrait: "928*1664",
+    VideoAspect.landscape: "1664*928",
+    VideoAspect.square: "1328*1328",
+}
+
+
+def is_bailian_image_enabled(app_config: dict | None = None) -> bool:
+    """百炼文生图复用 TokenPlan 的 Key/Host，配置了 Key 即视为可用。"""
+    app_config = config.app if app_config is None else app_config
+    return bool(str(app_config.get("bailian_tokenplan_api_key", "") or "").strip())
+
+
+def _bailian_native_base_url() -> str:
+    """从 TokenPlan 的 compatible-mode base_url 推导 DashScope 原生 host。
+
+    LLM 走 ``.../compatible-mode/v1``；图片/视频走同一 host 的 ``/api/v1/...``。
+    这里剥离 ``/compatible-mode/v1`` 得到原生 host，可用 ``bailian_native_base_url``
+    显式覆盖，全部缺省时回退到百炼 TokenPlan 北京网关。
+    """
+    configured_native = str(
+        config.app.get("bailian_native_base_url", "") or ""
+    ).strip()
+    if configured_native:
+        return configured_native.rstrip("/")
+    base = str(config.app.get("bailian_tokenplan_base_url", "") or "").strip().rstrip("/")
+    if not base:
+        return BAILIAN_NATIVE_HOST_FALLBACK
+    for suffix in ("/compatible-mode/v1", "/compatible-mode", "/v1"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+            break
+    return base.rstrip("/") or BAILIAN_NATIVE_HOST_FALLBACK
+
+
+def _bailian_image_api_key() -> str:
+    return str(config.app.get("bailian_tokenplan_api_key", "") or "").strip()
+
+
+def _bailian_image_endpoint() -> tuple[str, str]:
+    """返回百炼文生图同步端点与模型名，缺失 Key 时抛出带配置指引的错误。"""
+    if not _bailian_image_api_key():
+        raise ValueError(
+            "\n\n##### bailian_tokenplan_api_key is not set #####\n\n"
+            f"Please set it in the config.toml file: {config.config_file}\n"
+        )
+    model = str(
+        config.app.get("bailian_image_model", "") or BAILIAN_IMAGE_DEFAULT_MODEL
+    ).strip()
+    endpoint = f"{_bailian_native_base_url()}/{BAILIAN_IMAGE_ENDPOINT_PATH}"
+    return endpoint, model
+
+
+def _bailian_image_size(video_aspect: VideoAspect) -> str:
+    configured = str(config.app.get("bailian_image_size", "") or "").strip()
+    if configured:
+        return configured
+    return BAILIAN_IMAGE_DEFAULT_SIZES.get(VideoAspect(video_aspect), "1328*1328")
+
+
+def _bailian_image_prompt(search_term: str) -> str:
+    template = str(config.app.get("bailian_image_prompt_template", "") or "").strip()
+    if not template or "{term}" not in template:
+        return search_term
+    try:
+        return template.replace("{term}", search_term)
+    except Exception:
+        return search_term
+
+
+def _parse_bailian_image_response(
+    response: Any,
+    api_key: str,
+) -> tuple[bytes | None, str]:
+    """解析 multimodal-generation 响应，取回图片直链并下载为字节。
+
+    成功响应形如 ``output.choices[0].message.content[{"image": url}]``。解析
+    失败属于明确拒绝或异常格式，直接返回错误描述，不做退避重试——重发同样
+    的请求只会得到同样的结果。下载复用 openai_image 的计费安全下载器。
+    """
+    body = _response_json_safely(response)
+    if not isinstance(body, dict):
+        return None, _redact_secret(str(body or "")[:300], api_key)
+
+    output = body.get("output")
+    choices = output.get("choices") if isinstance(output, dict) else None
+    image_url = ""
+    if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+        message = choices[0].get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and isinstance(part.get("image"), str):
+                    image_url = part["image"]
+                    break
+
+    if not image_url.startswith(("http://", "https://")):
+        detail = _openai_image_response_message(body)
+        return None, _redact_secret(
+            detail or "bailian image response has no image url", api_key
+        )
+    return _openai_image_download_bytes(image_url, api_key)
+
+
+def _request_bailian_image(
+    endpoint: str,
+    payload: dict,
+    api_key: str,
+) -> tuple[bytes | None, str]:
+    """调用百炼同步 multimodal-generation 文生图，带退避重试与计费安全。
+
+    与 _request_openai_image 同一付费安全语义：连接阶段超时可安全重试；读
+    超时/连接中断视为"未确认"，抛 OpenAIImageUnconfirmedError 终止任务，避免
+    重复出图重复计费。TokenPlan 只有单把 Key，401/403 直接快速失败不轮换。
+    """
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    failure_detail = "no request attempt was made"
+    for attempt in range(1, OPENAI_IMAGE_MAX_ATTEMPTS + 1):
+        retryable = False
+        try:
+            response = requests.post(
+                endpoint,
+                json=payload,
+                headers=headers,
+                proxies=config.proxy,
+                verify=_get_tls_verify(),
+                timeout=OPENAI_IMAGE_REQUEST_TIMEOUT,
+            )
+        except requests.exceptions.ConnectTimeout as e:
+            failure_detail = (
+                f"connect timeout: detail={_redact_request_error(e, api_key)}"
+            )
+            retryable = True
+        except Exception as e:
+            raise OpenAIImageUnconfirmedError(
+                "unconfirmed bailian image request (no retry to avoid double "
+                f"billing): {type(e).__name__}, detail={_redact_request_error(e, api_key)}"
+            ) from e
+        else:
+            status = int(getattr(response, "status_code", 200) or 200)
+            if status in OPENAI_IMAGE_RETRYABLE_STATUS_CODES:
+                failure_detail = _openai_image_http_failure(response, status, api_key)
+                retryable = True
+            elif status >= 400:
+                return None, _openai_image_http_failure(response, status, api_key)
+            else:
+                image_bytes, parse_error = _parse_bailian_image_response(
+                    response, api_key
+                )
+                if image_bytes is not None:
+                    return image_bytes, ""
+                failure_detail = parse_error
+
+        if retryable and attempt < OPENAI_IMAGE_MAX_ATTEMPTS:
+            backoff_seconds = OPENAI_IMAGE_RETRY_BACKOFF_SECONDS[
+                min(attempt - 1, len(OPENAI_IMAGE_RETRY_BACKOFF_SECONDS) - 1)
+            ]
+            logger.warning(
+                "bailian image request failed, retrying: "
+                f"attempt={attempt}/{OPENAI_IMAGE_MAX_ATTEMPTS}, "
+                f"next_retry_in={backoff_seconds}s, detail={failure_detail}"
+            )
+            time.sleep(backoff_seconds)
+            continue
+        return None, failure_detail
+
+    return None, failure_detail
+
+
+def generate_images_bailian(
+    search_term: str,
+    minimum_duration: int,
+    video_aspect: VideoAspect = VideoAspect.portrait,
+    save_dir: str = "",
+) -> List[MaterialInfo]:
+    """用阿里云百炼文生图接口为一个脚本关键词生成一张图片并保存到本地。
+
+    与 generate_images_openai 保持同一签名和空列表失败约定；复用其落盘、下载
+    与计费安全逻辑，仅请求协议改为百炼同步 multimodal-generation。
+    """
+    aspect = VideoAspect(video_aspect)
+    clip_duration = max(int(minimum_duration), 1)
+    endpoint, model = _bailian_image_endpoint()
+    api_key = _bailian_image_api_key()
+    image_size = _bailian_image_size(aspect)
+    payload = {
+        "model": model,
+        "input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"text": _bailian_image_prompt(search_term)}],
+                }
+            ]
+        },
+        "parameters": {"size": image_size, "n": 1},
+    }
+    logger.info(
+        f"generating image via Bailian multimodal-generation: model={model}, "
+        f"term={search_term!r}, size={image_size}"
+    )
+    image_bytes, failure_detail = _request_bailian_image(endpoint, payload, api_key)
+    if image_bytes is None:
+        logger.error(
+            f"bailian image generation failed: term={search_term!r}, "
+            f"detail={failure_detail}"
+        )
+        return []
+
+    try:
+        image_path, width, height = _save_openai_image_file(image_bytes, save_dir)
+    except _OpenAIImageDecodeError as e:
+        logger.error(
+            "bailian image response is not a decodable image, skipping term: "
+            f"term={search_term!r}, error={type(e).__name__}, detail={e}"
+        )
+        return []
+
+    item = MaterialInfo()
+    item.provider = "bailian_image"
+    item.url = image_path
+    item.duration = clip_duration
+    item.source_info = {
+        "provider": "bailian_image",
+        "search_term": search_term,
+        "rendition": {"id": None, "width": width, "height": height},
+    }
+    return [item]
 
 
 def _search_videos_with_cache(
@@ -2217,6 +2512,17 @@ def download_videos(
         # 所需时长立即停止。生成结果是一次性的本地图片文件，也不参与 24
         # 小时搜索缓存——缓存会让不同任务反复拿到同一张图。
         return _download_videos_openai_image_on_demand(
+            task_id=task_id,
+            search_terms=search_terms,
+            video_aspect=video_aspect,
+            audio_duration=audio_duration,
+            max_clip_duration=max_clip_duration,
+            material_directory=material_directory,
+        )
+    if source == "bailian_image":
+        # 阿里云百炼文生图，与 openai_image 完全同款按需付费语义，仅请求协议
+        # 改为百炼同步 multimodal-generation；同样不入 24 小时搜索缓存。
+        return _download_videos_bailian_image_on_demand(
             task_id=task_id,
             search_terms=search_terms,
             video_aspect=video_aspect,
