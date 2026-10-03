@@ -47,6 +47,7 @@ from app.models.schema import (
 from app.services import bgm as bgm_service
 from app.services import material_upload as material_upload_service
 from app.services import (
+    bailian_video,
     cache_manager,
     llm,
     loomloom,
@@ -132,6 +133,7 @@ VIDEO_SOURCE_GROUPS = {
         "ofox",
         "loomloom",
         "volcengine_seedance",
+        "bailian_video",
         "wavespeed",
         "muapi",
     ),
@@ -763,6 +765,7 @@ def _initialize_session_state():
         "ofox_confirm_charge": False,
         "metaso_minimax_confirm_charge": False,
         "muapi_confirm_charge": False,
+        "bailian_video_confirm_charge": False,
         # AI 视频按素材段计费，默认只生成一段，用户确认效果后再主动增加数量。
         "loomloom_video_scene_count": _saved_ui_number(
             "loomloom_video_scene_count",
@@ -4000,6 +4003,63 @@ def _render_settings_dialog():
                     muapi_resolution.strip() or muapi.DEFAULT_RESOLUTION,
                 )
 
+                st.divider()
+                st.markdown(f"**{tr('Bailian Video')}**")
+                st.caption(tr("Bailian Video Help"))
+                configured_bailian_video_model = str(
+                    config.app.get("bailian_video_model", bailian_video.DEFAULT_MODEL_ID)
+                    or bailian_video.DEFAULT_MODEL_ID
+                ).strip()
+                bailian_video_model = st.text_input(
+                    tr("Bailian Video Model"),
+                    value=(
+                        ""
+                        if configured_bailian_video_model
+                        == bailian_video.DEFAULT_MODEL_ID
+                        else configured_bailian_video_model
+                    ),
+                    placeholder=bailian_video.DEFAULT_MODEL_ID,
+                    key="bailian_video_model_input",
+                    help=tr("Bailian Video Model Help"),
+                )
+                _set_runtime_config(
+                    "app",
+                    "bailian_video_model",
+                    bailian_video_model.strip() or bailian_video.DEFAULT_MODEL_ID,
+                )
+                bailian_resolution_options = sorted(
+                    bailian_video.SUPPORTED_RESOLUTIONS
+                )
+                configured_bailian_resolution = str(
+                    config.app.get(
+                        "bailian_video_resolution", bailian_video.DEFAULT_RESOLUTION
+                    )
+                    or bailian_video.DEFAULT_RESOLUTION
+                ).strip().upper()
+                if configured_bailian_resolution not in bailian_resolution_options:
+                    configured_bailian_resolution = bailian_video.DEFAULT_RESOLUTION
+                bailian_resolution = st.selectbox(
+                    tr("Bailian Video Resolution"),
+                    options=bailian_resolution_options,
+                    index=bailian_resolution_options.index(configured_bailian_resolution),
+                    key="bailian_video_resolution_select",
+                    help=tr("Bailian Video Resolution Help"),
+                )
+                _set_runtime_config(
+                    "app", "bailian_video_resolution", bailian_resolution
+                )
+                bailian_watermark = st.checkbox(
+                    tr("Bailian Video Watermark"),
+                    value=bool(
+                        config.app.get("bailian_video_watermark", False)
+                    ),
+                    key="bailian_video_watermark_input",
+                    help=tr("Bailian Video Watermark Help"),
+                )
+                _set_runtime_config(
+                    "app", "bailian_video_watermark", bool(bailian_watermark)
+                )
+
 
             with st.container(border=True):
                 st.markdown(f"#### {tr('AI Image Generation APIs')}")
@@ -5222,6 +5282,7 @@ def _render_video_settings(panel, params):
                 "coverr": tr("Coverr"),
                 "wavespeed": tr("WaveSpeed AI Video"),
                 "volcengine_seedance": tr("Volcano Engine Seedance"),
+                "bailian_video": tr("Bailian Video"),
                 "ofox": tr("OFox AI Video"),
                 "metaso_minimax": tr("Metaso MiniMax H3"),
                 "muapi": tr("MuAPI AI Video"),
@@ -5549,6 +5610,8 @@ def _render_video_settings(panel, params):
                 _render_metaso_minimax_video_settings(params)
             if params.video_source == "muapi":
                 _render_muapi_video_settings(params)
+            if params.video_source == "bailian_video":
+                _render_bailian_video_settings(params)
     return uploaded_files
 
 
@@ -5708,6 +5771,29 @@ def _render_muapi_video_settings(params):
         tr("Confirm MuAPI Charge"),
         key="muapi_confirm_charge",
         help=tr("Confirm MuAPI Charge Help"),
+    )
+
+
+def _render_bailian_video_settings(params):
+    """展示预计付费任务数量，并要求用户确认阿里云百炼文生视频费用。"""
+    clip_duration = max(int(params.video_clip_duration or 1), 1)
+    video_count = max(int(params.video_count or 1), 1)
+    if estimated_range := _estimate_voiceover_duration_range(
+        str(params.video_script or ""), params.voice_rate
+    ):
+        min_clips = max(math.ceil(estimated_range[0] * video_count / clip_duration), 1)
+        max_clips = max(
+            math.ceil(estimated_range[1] * video_count / clip_duration), min_clips
+        )
+        st.warning(
+            tr("Bailian Video Billing Notice").format(min=min_clips, max=max_clips)
+        )
+    else:
+        st.warning(tr("Bailian Video Billing Notice Without Script"))
+    st.checkbox(
+        tr("Confirm Bailian Video Charge"),
+        key="bailian_video_confirm_charge",
+        help=tr("Confirm Bailian Video Charge Help"),
     )
 
 
@@ -8164,6 +8250,20 @@ def _render_generation_controls(
         ):
             _remove_active_generation_task(task_id)
             st.error(tr("Confirm MuAPI Charge Required"))
+            st.stop()
+
+        if params.video_source == "bailian_video" and not (
+            bailian_video.is_enabled(config.snapshot_config_with_pending(config.app))
+        ):
+            _remove_active_generation_task(task_id)
+            st.error(tr("Please Enter the Bailian API Key"))
+            st.stop()
+
+        if params.video_source == "bailian_video" and not st.session_state.get(
+            "bailian_video_confirm_charge", False
+        ):
+            _remove_active_generation_task(task_id)
+            st.error(tr("Confirm Bailian Video Charge Required"))
             st.stop()
 
         if params.video_source == "openai_image" and not material.is_openai_image_enabled(

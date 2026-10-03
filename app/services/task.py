@@ -17,6 +17,7 @@ from app.models import const
 from app.models.schema import VideoConcatMode, VideoParams
 from app.services import bgm as bgm_service
 from app.services import (
+    bailian_video,
     elevenlabs_music,
     llm,
     loomloom,
@@ -802,6 +803,20 @@ def get_video_materials(
                 details=details,
             )
             return None
+        except bailian_video.BailianVideoError as exc:
+            # 与方舟同一恢复语义：未确认状态和已生成但下载失败都对应一个可在
+            # 百炼控制台按 task_id 找回的远端付费任务，统一写入失败状态。
+            remote_task_id = str(getattr(exc, "task_id", "") or "").strip()
+            details = (
+                {"bailian_video_task_id": remote_task_id} if remote_task_id else None
+            )
+            _mark_task_failed(
+                task_id,
+                "materials",
+                str(exc),
+                details=details,
+            )
+            return None
         except (
             material.WaveSpeedUnconfirmedTaskError,
             material.WaveSpeedDownloadError,
@@ -1485,6 +1500,18 @@ def _run_pipeline(
             task_id,
             "preflight",
             "Volcano Engine Seedance requires an Ark API key",
+        )
+
+    if (
+        stop_at in {"materials", "video"}
+        and params.video_source == "bailian_video"
+        and not bailian_video.is_enabled()
+    ):
+        return _mark_task_failed(
+            task_id,
+            "preflight",
+            "Alibaba Cloud Bailian video requires an API key "
+            "(bailian_tokenplan_api_key or bailian_video_api_key)",
         )
 
     if (

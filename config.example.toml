@@ -122,6 +122,30 @@ volcengine_seedance_poll_interval = 5
 volcengine_seedance_run_timeout = 1800
 volcengine_seedance_watermark = false
 
+# Alibaba Cloud Bailian (Model Studio) TokenPlan text-to-video via HappyHorse,
+# using the DashScope-native async task API on the same TokenPlan gateway host.
+# It reuses the LLM provider's bailian_tokenplan_api_key by default; set
+# bailian_video_api_key only to override with a dedicated key. When both are
+# empty, the BAILIAN_API_KEY environment variable is used. Generation is billed
+# per submitted clip.
+bailian_video_api_key = ""
+# Model id, for example "happyhorse-1.1-t2v" (text-to-video). The i2v/r2v
+# variants need image/reference inputs and are not wired into this source yet.
+bailian_video_model = "happyhorse-1.1-t2v"
+bailian_video_resolution = "1080P" # "480P", "720P", or "1080P"
+# HappyHorse accepts 3-15 second clips; requested durations are clamped to this
+# range before submission (extra footage is trimmed by the editing pipeline).
+bailian_video_min_duration = 3
+bailian_video_max_duration = 15
+bailian_video_poll_interval = 5
+bailian_video_run_timeout = 1800
+# HappyHorse adds a "Happy Horse" watermark by default; keep this false to
+# request clean output.
+bailian_video_watermark = false
+# Optional override for the DashScope-native host. Leave empty to derive it from
+# bailian_tokenplan_base_url. Example: "https://dashscope.aliyuncs.com"
+# (bailian_native_base_url is shared with the bailian_image source.)
+
 # OFox (https://ofox.ai) exposes multiple text-to-video models (Seedance, Wan,
 # and more) behind one API key using an asynchronous /v1/videos API.
 # Create an API key at https://ofox.ai
