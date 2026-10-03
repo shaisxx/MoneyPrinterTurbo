@@ -274,6 +274,19 @@ LLM_PROVIDER_REGISTRY = (
         requires_base_url=False,
         show_base_url=False,
     ),
+    # 阿里云百炼 TokenPlan：走 `/compatible-mode/v1` 的 OpenAI 兼容端点，
+    # 与上面使用 dashscope 原生协议的 qwen Provider 相互独立，因此复用默认的
+    # openai_compatible 适配器，无需在 llm.py 中新增分支。
+    LLMProviderSpec(
+        "bailian_tokenplan",
+        "Alibaba Cloud Bailian TokenPlan",
+        api_key_url="https://bailian.console.aliyun.com/?apiKey=1",
+        default_model="qwen3.8-max",
+        default_base_url=(
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+        ),
+        model_docs_url="https://help.aliyun.com/zh/model-studio/",
+    ),
     LLMProviderSpec(
         "azure",
         "Microsoft Azure OpenAI",

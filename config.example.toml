@@ -322,6 +322,15 @@ deepseek_model_name = ""
 qwen_api_key = ""
 qwen_model_name = ""
 
+# Alibaba Cloud Bailian TokenPlan, an OpenAI-compatible endpoint under the
+# Bailian (Model Studio) MaaS gateway. Distinct from `qwen` above, which uses
+# the native DashScope protocol.
+# API key: https://bailian.console.aliyun.com/?apiKey=1
+# Model list: https://help.aliyun.com/zh/model-studio/
+bailian_tokenplan_api_key = ""
+bailian_tokenplan_base_url = ""
+bailian_tokenplan_model_name = ""
+
 # Microsoft Azure OpenAI. model_name is the deployment name.
 # Documentation: https://learn.microsoft.com/azure/ai-services/openai/reference
 azure_api_key = ""

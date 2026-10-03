@@ -414,6 +414,22 @@ class TestLiteLLMProvider(unittest.TestCase):
             "https://y-api.bestvirtualgoods.com/app/keys",
         )
         self.assertEqual(yapi.model_docs_url, "https://y-api.bestvirtualgoods.com/models")
+        bailian_tokenplan = get_llm_provider("bailian_tokenplan")
+        self.assertEqual(bailian_tokenplan.default_model, "qwen3.8-max")
+        self.assertEqual(
+            bailian_tokenplan.default_base_url,
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+        )
+        self.assertEqual(bailian_tokenplan.adapter, "openai_compatible")
+        self.assertTrue(bailian_tokenplan.requires_api_key)
+        self.assertEqual(
+            bailian_tokenplan.api_key_url,
+            "https://bailian.console.aliyun.com/?apiKey=1",
+        )
+        self.assertEqual(
+            bailian_tokenplan.model_docs_url,
+            "https://help.aliyun.com/zh/model-studio/",
+        )
         pollinations = get_llm_provider("pollinations")
         self.assertEqual(pollinations.default_model, "openai-fast")
         self.assertEqual(
@@ -457,6 +473,7 @@ class TestLiteLLMProvider(unittest.TestCase):
                 "gemini",
                 "deepseek",
                 "qwen",
+                "bailian_tokenplan",
                 "azure",
                 "volcengine",
                 "grok",
